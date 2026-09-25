@@ -1,0 +1,13 @@
+{
+  "name": "fca-nsm-api",
+  "version": "1.0.0",
+  "description": "Barebones client and HTTP endpoint for the FCA's National Storage Mechanism (NSM) search API, extracted from RNS_Update.",
+  "main": "nsm.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED"
+}

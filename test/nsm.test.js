@@ -1,5 +1,7 @@
 // Unit tests for nsm.js with global.fetch mocked - no real NSM requests.
 const { describe, it, beforeEach, afterEach } = require('node:test');
+// Keep these tests on the in-memory cache even if DATABASE_URL is set.
+delete process.env.DATABASE_URL;
 const assert = require('node:assert/strict');
 
 const {

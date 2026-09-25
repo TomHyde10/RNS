@@ -1,6 +1,7 @@
 // The delta-fetch path needs an expired cache entry, so this file sets a 0
 // TTL before loading nsm.js (node --test runs each file in its own process).
 process.env.NSM_CACHE_TTL_MINUTES = '0';
+delete process.env.DATABASE_URL;
 
 const { it } = require('node:test');
 const assert = require('node:assert/strict');

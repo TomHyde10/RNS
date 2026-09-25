@@ -1,8 +1,8 @@
 // Barebones client for the FCA's National Storage Mechanism (NSM) search
 // API - given one or more LEIs, returns the regulatory filings of the
 // chosen categories published for them in the last N days. Falls back to
-// the companies in leis.json when no LEIs are given. Results are cached in
-// memory per LEI (see the cache section below).
+// the companies in leis.json when no LEIs are given. Results are cached per
+// LEI, in memory or optionally in Postgres (see the cache section below).
 //
 // This is an undocumented, reverse-engineered endpoint (no public API
 // docs, no key), confirmed by capturing a real browser request/response
@@ -12,6 +12,7 @@
 // so one request per LEI is enough.
 
 const defaultCompanies = require('./leis.json');
+const cacheStore = require('./cacheStore');
 
 const NSM_SEARCH_URL = 'https://api.data.fca.org.uk/search?index=nsm-search';
 const NSM_ARTEFACT_BASE = 'https://data.fca.org.uk/artefacts/';
@@ -155,20 +156,23 @@ async function fetchForLei(lei, toIso, size) {
 
 // --- Cache ---
 //
-// Each LEI's raw NSM items are cached in memory for CACHE_TTL_MS. Keyed
+// Each LEI's raw NSM items are cached for CACHE_TTL_MS. Keyed
 // only by LEI, not by window/categories, because both filters are applied
 // afterwards against the same raw item list - so an entry fetched with a
 // large enough `size` covers any smaller later request for that LEI. A
 // request needing a bigger `size` than what's cached (a wider window) is a
 // miss and gets a full re-fetch. A stale entry that is still deep enough
 // only asks NSM for what's new since it was fetched (a "delta" fetch) and
-// merges that in. The cache lives in this process only, so it is lost on
-// restart.
+// merges that in.
+//
+// With DATABASE_URL set the cache is kept in Postgres (cacheStore.js), so
+// it survives a restart and is shared between instances. Without it, the
+// cache is an in-memory Map, lost on restart.
 const parsedCacheTtlMinutes = parseInt(process.env.NSM_CACHE_TTL_MINUTES, 10);
 // Explicit 0 disables caching; anything else invalid/unset means 10.
 const CACHE_TTL_MINUTES = Number.isNaN(parsedCacheTtlMinutes) ? 10 : parsedCacheTtlMinutes;
 const CACHE_TTL_MS = CACHE_TTL_MINUTES * 60 * 1000;
-const cache = new Map(); // lei -> { items, size, fetchedAt }
+const memoryCache = new Map(); // lei -> { items, size, fetchedAt } - used only when cacheStore is disabled
 
 function isFresh(cached, size) {
   return cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS && cached.size >= size;
@@ -199,8 +203,32 @@ function catchUpSize(elapsedMs) {
   return resultsPerLei(elapsedDays);
 }
 
+// A database error shouldn't take down report loading - a failed read is
+// treated as a cold cache and a failed write is just logged.
+async function readCache(lei) {
+  if (!cacheStore.enabled) return memoryCache.get(lei) || null;
+  try {
+    return await cacheStore.getCached(lei);
+  } catch (err) {
+    console.error(`nsm_cache read failed for ${lei}:`, err.message || err);
+    return null;
+  }
+}
+
+async function writeCache(lei, items, size) {
+  if (!cacheStore.enabled) {
+    memoryCache.set(lei, { items, size, fetchedAt: Date.now() });
+    return;
+  }
+  try {
+    await cacheStore.setCached(lei, items, size);
+  } catch (err) {
+    console.error(`nsm_cache write failed for ${lei}:`, err.message || err);
+  }
+}
+
 async function fetchForLeiCached(lei, toIso, size) {
-  const cached = cache.get(lei);
+  const cached = await readCache(lei);
   if (isFresh(cached, size)) return { lei, items: cached.items, cached: true };
 
   if (cached && cached.size >= size) {
@@ -208,17 +236,18 @@ async function fetchForLeiCached(lei, toIso, size) {
     // A failed catch-up still leaves slightly stale but usable data.
     if (delta.error) return { lei, items: cached.items, cached: true };
     const merged = mergeItems(cached.items, delta.items);
-    cache.set(lei, { items: merged, size: Math.max(cached.size, size), fetchedAt: Date.now() });
+    await writeCache(lei, merged, Math.max(cached.size, size));
     return { lei, items: merged, delta: true };
   }
 
   const result = await fetchForLei(lei, toIso, size);
-  if (!result.error) cache.set(lei, { items: result.items, size, fetchedAt: Date.now() });
+  if (!result.error) await writeCache(lei, result.items, size);
   return result;
 }
 
+// Clears the in-memory cache only - the Postgres table is left alone.
 function clearCache() {
-  cache.clear();
+  memoryCache.clear();
 }
 
 async function fetchReports({ leis, days, categories } = {}) {
@@ -270,6 +299,7 @@ async function fetchReports({ leis, days, categories } = {}) {
       failedLeis: failed.length ? failed : undefined,
       cachedLeis: cachedLeis.length ? cachedLeis : undefined,
       deltaLeis: deltaLeis.length ? deltaLeis : undefined,
+      cacheBackend: cacheStore.enabled ? 'postgres' : 'memory',
     },
   };
 }

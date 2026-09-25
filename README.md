@@ -3,9 +3,9 @@
 Barebones client and HTTP endpoint for the FCA's National Storage Mechanism
 (NSM) search API. Extracted from
 [RNS_Update](https://github.com/TomHyde10/RNS_Update)'s `lib/fetchReports.js`,
-keeping the default company list, the category filter and the in-memory
-cache. Postgres caching, digest emails, push notifications, RSS/ICS feeds,
-keyword search and the frontend were left out.
+keeping the default company list, the category filter and the cache
+(in memory, or optionally in Postgres). Digest emails, push notifications,
+RSS/ICS feeds, keyword search and the frontend were left out.
 
 The NSM search endpoint (`https://api.data.fca.org.uk/search?index=nsm-search`)
 is undocumented and reverse-engineered from a captured browser request. It
@@ -19,7 +19,8 @@ npm start   # HTTP server on PORT (default 3000)
 npm test    # unit tests, NSM mocked
 ```
 
-No dependencies beyond Node 18+.
+Needs Node 18+. The only package is `pg`, and only for the optional
+Postgres cache (see below). `npm install --omit=optional` skips it.
 
 ### `GET /api/reports`
 
@@ -68,6 +69,7 @@ Response:
 
 `scanned` counts every filing in the window before the category filter.
 `failedLeis`, `cachedLeis` and `deltaLeis` only appear when non-empty.
+`cacheBackend` is `memory` or `postgres`.
 
 ## `leis.json`
 
@@ -83,7 +85,7 @@ it before relying on it.
 
 ## Caching
 
-Each LEI's raw NSM results are cached in memory for `NSM_CACHE_TTL_MINUTES`
+Each LEI's raw NSM results are cached for `NSM_CACHE_TTL_MINUTES`
 (default `10`; `0` disables it). The cache key is the LEI alone, because the
 day window and categories are applied afterwards, so one cached fetch serves
 any category filter and any shorter window.
@@ -95,8 +97,37 @@ any category filter and any shorter window.
 - No entry, or the new window needs more results than were cached: full
   fetch.
 
-The cache lives in the process, so it is lost on restart and not shared
-between instances.
+By default the cache lives in the process, so it is lost on restart and not
+shared between instances.
+
+### Optional: Postgres cache
+
+Set `DATABASE_URL` and the cache is stored in Postgres instead, so it
+survives restarts (useful on hosts that sleep, such as Render's free tier)
+and is shared between instances. The `nsm_cache` table is created on first
+use. Needs the `pg` package (`npm install` includes it).
+
+```
+DATABASE_URL=postgres://user:password@host:5432/dbname npm start
+```
+
+- The database's TLS certificate is verified by default. If your provider
+  uses a CA that isn't in Node's default store, set `DATABASE_SSL_CA` to its
+  certificate (PEM text; literal `\n`s are converted to newlines).
+- `DATABASE_SSL_VERIFY=false` skips verification. The connection is still
+  encrypted but open to interception, so use it only as a last resort.
+- An `sslmode` in `DATABASE_URL` overrides both, for example
+  `?sslmode=disable` for a local database without TLS.
+- If the database is unreachable or `pg` is missing, requests still succeed
+  but go uncached. The error is logged for each LEI on each request.
+
+`npm test` skips the Postgres test unless `TEST_DATABASE_URL` is set:
+
+```
+TEST_DATABASE_URL='postgres://postgres@localhost:5432/postgres?sslmode=disable' npm test
+```
+
+It writes and then deletes one row with a test-only LEI.
 
 ## Use as a library
 

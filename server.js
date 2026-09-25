@@ -1,6 +1,6 @@
 // Thin HTTP wrapper around nsm.js - a single GET /api/reports endpoint,
-// nothing else. No static frontend, no auth, no caching, no digest/push,
-// no dependencies beyond Node's own http module.
+// nothing else. No static frontend, no auth, no digest/push, no
+// dependencies beyond Node's own http module.
 const http = require('http');
 const { URL } = require('url');
 const { fetchReports } = require('./nsm');
@@ -14,6 +14,7 @@ const server = http.createServer(async (req, res) => {
     const { status, body } = await fetchReports({
       leis: url.searchParams.get('leis'),
       days: url.searchParams.get('days'),
+      categories: url.searchParams.get('categories'),
     });
     res.writeHead(status, { 'content-type': 'application/json' });
     res.end(JSON.stringify(body));
